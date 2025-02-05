@@ -43,15 +43,26 @@ Handle
 	g_hShowBoss = INVALID_HANDLE,
 	g_hHearSound = INVALID_HANDLE,
 	g_hHMSpec = INVALID_HANDLE,
-	g_hSoundVolume = INVALID_HANDLE;
+	g_hSoundVolume = INVALID_HANDLE,
+	g_hHitmarkerCookie = INVALID_HANDLE;
+
+enum struct HitmarkerInfo
+{
+    char name[64];
+    char path[256];
+    char sm_flags[32];
+}
+
+ArrayList g_aHitmarkers;
+char g_bHitmarkerCookie[MAXPLAYERS + 1] [256];
 
 public Plugin myinfo = 
 {
 	name = "HitMarker",
-	author = "Nano, maxime1907, .Rushaway, Dolly",
+	author = "Nano, maxime1907, .Rushaway, Dolly, +SyntX",
 	description = "Displays a hitmarker when you deal damage",
-	version = "1.2.2",
-	url = ""
+	version = "1.3.0",
+	url = "https://steamcommunity.com/id/SyntX34 && https://github.com/SyntX34"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
@@ -82,71 +93,138 @@ public void OnLibraryRemoved(const char[] name)
 
 public void OnPluginStart()
 {
-	g_cvEnable = CreateConVar("sm_hitmarker_enable", "1", "Enable HitMarker functions", _, true, 0.0, true, 1.0);
-	g_cHitIntervalDisplay = CreateConVar("sm_hitmarker_interval_display", "0.1", "How much time between every hit", 0, true, 0.0, true, 1.0);
-	
-	g_cHitIntervalDisplay.AddChangeHook(OnConVarChanged);
+    g_cvEnable = CreateConVar("sm_hitmarker_enable", "1", "Enable HitMarker functions", _, true, 0.0, true, 1.0);
+    g_cHitIntervalDisplay = CreateConVar("sm_hitmarker_interval_display", "0.1", "How much time between every hit", 0, true, 0.0, true, 1.0);
+    
+    g_cHitIntervalDisplay.AddChangeHook(OnConVarChanged);
 
-	g_hShowZombie = RegClientCookie("hitmaker_zombie", "Enable/Disable hitmarker against zombies", CookieAccess_Private);
-	g_hShowBoss = RegClientCookie("hitmarker_boss", "Enable/Disable hitmarker against bosses", CookieAccess_Private);
-	g_hHearSound = RegClientCookie("hitmarker_sound", "Enable/Disable hitmarker sound effect", CookieAccess_Private);
-	g_hHMSpec = RegClientCookie("hitmarker_sound_spec", "Enable/Disable hitmarker sound effect", CookieAccess_Private);
-	g_hSoundVolume = RegClientCookie("hitmarker_sound_volume", "Enable/Disable hitmarker sound effect", CookieAccess_Private);
+    g_hShowZombie = RegClientCookie("hitmaker_zombie", "Enable/Disable hitmarker against zombies", CookieAccess_Private);
+    g_hShowBoss = RegClientCookie("hitmarker_boss", "Enable/Disable hitmarker against bosses", CookieAccess_Private);
+    g_hHearSound = RegClientCookie("hitmarker_sound", "Enable/Disable hitmarker sound effect", CookieAccess_Private);
+    g_hHMSpec = RegClientCookie("hitmarker_sound_spec", "Enable/Disable hitmarker sound effect", CookieAccess_Private);
+    g_hSoundVolume = RegClientCookie("hitmarker_sound_volume", "Enable/Disable hitmarker sound effect", CookieAccess_Private);
+    g_hHitmarkerCookie = RegClientCookie("hitmarker_selected", "Selected hitmarker", CookieAccess_Private);
 
-	SetCookieMenuItem(CookieMenu_HitMarker, INVALID_HANDLE, "HitMarker Settings");
+    SetCookieMenuItem(CookieMenu_HitMarker, INVALID_HANDLE, "HitMarker Settings");
 
-	HookEntityOutput("func_physbox", "OnHealthChanged", Hook_EntityOnDamage);
-	HookEntityOutput("func_physbox_multiplayer", "OnHealthChanged", Hook_EntityOnDamage);
-	HookEntityOutput("func_breakable", "OnHealthChanged", Hook_EntityOnDamage);
-	HookEntityOutput("math_counter", "OutValue", Hook_EntityOnDamage);
+    HookEntityOutput("func_physbox", "OnHealthChanged", Hook_EntityOnDamage);
+    HookEntityOutput("func_physbox_multiplayer", "OnHealthChanged", Hook_EntityOnDamage);
+    HookEntityOutput("func_breakable", "OnHealthChanged", Hook_EntityOnDamage);
+    HookEntityOutput("math_counter", "OutValue", Hook_EntityOnDamage);
 
-	HookEvent("player_hurt", Hook_EventOnDamage);
+    HookEvent("player_hurt", Hook_EventOnDamage);
 
-	RegConsoleCmd("sm_hitmarker", Command_HitMarker);
-	RegConsoleCmd("sm_hm", Command_HitMarker);
-	RegConsoleCmd("sm_hmvolume", Command_HitMarkerVolume);
+    RegConsoleCmd("sm_hitmarker", Command_HitMarker);
+    RegConsoleCmd("sm_hm", Command_HitMarker);
+    RegConsoleCmd("sm_hmvolume", Command_HitMarkerVolume);
 
-	AutoExecConfig(true);
-	GetConVars();
+    AutoExecConfig(true);
+    GetConVars();
 
-	// Late load
-	if (g_bLate)
-	{
-		for (int i = 1; i <= MaxClients; i++)
-		{
-			if (IsClientConnected(i))
-			{
-				OnClientPutInServer(i);
-			}
-		}
-	}
+    // Load hitmarkers from config
+    LoadHitmarkers();
+
+    // Late load
+    if (g_bLate)
+    {
+        for (int i = 1; i <= MaxClients; i++)
+        {
+            if (IsClientConnected(i))
+            {
+                OnClientPutInServer(i);
+            }
+        }
+    }
 }
 
 public void OnPluginEnd()
 {
-	// Late unload
-	if (g_bLate)
-	{
-		for (int i = 1; i <= MaxClients; i++)
-		{
-			if(IsClientConnected(i))
-			{
-				OnClientDisconnect(i);
-			}
-		}
-	}
+    // Late unload
+    if (g_bLate)
+    {
+        for (int i = 1; i <= MaxClients; i++)
+        {
+            if(IsClientConnected(i))
+            {
+                OnClientDisconnect(i);
+            }
+        }
+    }
 
-	Cleanup(true);
+    Cleanup(true);
 }
 
 public void OnMapStart()
 {
-	PrecacheSound(SND_PATH_HIT_PRECACHE);
-	PrecacheModel(MATERIAL_PATH_HIT_VTF_PRECACHE);
-	PrecacheModel(MATERIAL_PATH_HIT_VMT_PRECACHE);
+    PrecacheSound(SND_PATH_HIT_PRECACHE);
+    PrecacheModel(MATERIAL_PATH_HIT_VTF_PRECACHE);
+    PrecacheModel(MATERIAL_PATH_HIT_VMT_PRECACHE);
 
-	AddFilesToDownloadsTable("hitmarker_downloadlist.ini");
+    // Precache all hitmarkers
+    for (int i = 0; i < g_aHitmarkers.Length; i++)
+    {
+        HitmarkerInfo hitmarker;
+        g_aHitmarkers.GetArray(i, hitmarker);
+        PrecacheModel(hitmarker.path);
+    }
+
+    AddFilesToDownloadsTable("hitmarker_downloadlist.ini");
 }
+
+void LoadHitmarkers()
+{
+    g_aHitmarkers = new ArrayList(sizeof(HitmarkerInfo));
+
+    char configPath[PLATFORM_MAX_PATH];
+    BuildPath(Path_SM, configPath, sizeof(configPath), "configs/hitmarkers.cfg");
+
+    if (!FileExists(configPath))
+    {
+        LogError("Hitmarkers file not found: %s", configPath);
+        return;
+    }
+
+    KeyValues kv = new KeyValues("Hitmarkers");
+    if (!kv.ImportFromFile(configPath))
+    {
+        LogError("Could not load hitmarkers.cfg from %s", configPath);
+        delete kv;
+        return;
+    }
+
+    if (!kv.GotoFirstSubKey())
+    {
+        LogError("No hitmarkers found in %s", configPath);
+        delete kv;
+        return;
+    }
+
+    int hitmarkerCount = 0;
+
+    do
+    {
+        HitmarkerInfo hitmarker;
+        kv.GetString("name", hitmarker.name, sizeof(hitmarker.name));
+        kv.GetString("path", hitmarker.path, sizeof(hitmarker.path));
+        kv.GetString("sm_flags", hitmarker.sm_flags, sizeof(hitmarker.sm_flags));
+
+        LogMessage("Loading Hitmarker #%d: Name='%s', Path='%s', SM_Flags='%s'", 
+                   hitmarkerCount + 1, hitmarker.name, hitmarker.path, hitmarker.sm_flags);
+
+        if (hitmarker.path[0] != '\0')
+        {
+            PrecacheModel(hitmarker.path, true);
+        }
+
+        g_aHitmarkers.PushArray(hitmarker);
+        hitmarkerCount++;
+    } while (kv.GotoNextKey());
+
+    LogMessage("Successfully loaded %d hitmarkers from %s.", hitmarkerCount, configPath);
+
+    delete kv;
+}
+
 
 public void OnClientPutInServer(int client)
 {
@@ -162,6 +240,7 @@ public void OnClientDisconnect(int client)
 public void OnClientCookiesCached(int client)
 {
 	ReadClientCookies(client);
+	GetClientCookie(client, g_hHitmarkerCookie, g_bHitmarkerCookie[client], sizeof(g_bHitmarkerCookie[]));
 }
 
 public void OnConVarChanged(ConVar convar, char[] oldValue, char[] newValue)
@@ -216,95 +295,191 @@ public void CookieMenu_HitMarker(int client, CookieMenuAction action, any info, 
 	}
 }
 
+public void DisplayHitmarkerMenu(int client)
+{
+    Menu menu = new Menu(MenuHandler_HitmarkerSelect, MENU_ACTIONS_DEFAULT | MenuAction_DisplayItem);
+    menu.ExitBackButton = true;
+    menu.ExitButton = true;
+
+    menu.SetTitle("Select Hitmarker");
+
+    char currentHitmarker[256];
+    strcopy(currentHitmarker, sizeof(currentHitmarker), g_bHitmarkerCookie[client]);
+
+    for (int i = 0; i < g_aHitmarkers.Length; i++)
+    {
+        HitmarkerInfo hitmarker;
+        g_aHitmarkers.GetArray(i, hitmarker);
+
+        if (hitmarker.sm_flags[0] != '\0' && !CheckCommandAccess(client, "", ReadFlagString(hitmarker.sm_flags)))
+            continue;
+
+        char itemDisplay[256];
+        if (StrEqual(currentHitmarker, hitmarker.name))
+        {
+            Format(itemDisplay, sizeof(itemDisplay), "%s (Selected)", hitmarker.name);
+        }
+        else
+        {
+            Format(itemDisplay, sizeof(itemDisplay), "%s", hitmarker.name);
+        }
+
+        menu.AddItem(hitmarker.path, itemDisplay);
+    }
+
+    menu.Display(client, MENU_TIME_FOREVER);
+}
+
+
+public int MenuHandler_HitmarkerSelect(Menu menu, MenuAction action, int param1, int param2)
+{
+    switch (action)
+    {
+        case MenuAction_End:
+        {
+            delete menu;
+        }
+
+        case MenuAction_Cancel:
+        {
+            if (param2 == MenuCancel_ExitBack)
+            {
+                DisplayCookieMenu(param1);
+                return 0;
+            }
+        }
+
+        case MenuAction_Select:
+        {
+            char sBuffer[256];
+            menu.GetItem(param2, sBuffer, sizeof(sBuffer));
+
+            char hitmarkerName[256] = "Unknown";
+            for (int i = 0; i < g_aHitmarkers.Length; i++)
+            {
+                HitmarkerInfo hitmarker;
+                g_aHitmarkers.GetArray(i, hitmarker);
+
+                if (StrEqual(hitmarker.path, sBuffer))
+                {
+                    strcopy(hitmarkerName, sizeof(hitmarkerName), hitmarker.name);
+                    break;
+                }
+            }
+
+            if (StrEqual(hitmarkerName, g_bHitmarkerCookie[param1]))
+            {
+                CPrintToChat(param1, "{fullred}[HitMarker]{default} You have already selected this hitmarker: {aqua}%s", hitmarkerName);
+                return 0;
+            }
+
+            strcopy(g_bHitmarkerCookie[param1], sizeof(g_bHitmarkerCookie[]), hitmarkerName);
+            SetClientCookie(param1, g_hHitmarkerCookie, hitmarkerName);
+            CPrintToChat(param1, "{olive}[HitMarker]{default} You have selected a new hitmarker: {aqua}%s", hitmarkerName);
+        }
+    }
+
+    return 0;
+}
+
 public void DisplayCookieMenu(int client)
 {
-	Menu menu = new Menu(MenuHandler_HitMarker, MENU_ACTIONS_DEFAULT | MenuAction_DisplayItem);
-	menu.ExitBackButton = true;
-	menu.ExitButton = true;
-	
-	menu.SetTitle("HitMarker Settings");
-	menu.AddItem(NULL_STRING, "Show against zombies");
-	menu.AddItem(NULL_STRING, "Show against bosses");
-	menu.AddItem(NULL_STRING, "Hear a sound effect");
-	menu.AddItem(NULL_STRING, "Hear sound in spec");
-	menu.AddItem(NULL_STRING, "Change Sound Volume");
-	menu.Display(client, MENU_TIME_FOREVER);
+    Menu menu = new Menu(MenuHandler_HitMarker, MENU_ACTIONS_DEFAULT | MenuAction_DisplayItem);
+    menu.ExitBackButton = true;
+    menu.ExitButton = true;
+    
+    menu.SetTitle("HitMarker Settings");
+    menu.AddItem(NULL_STRING, "Show against zombies");
+    menu.AddItem(NULL_STRING, "Show against bosses");
+    menu.AddItem(NULL_STRING, "Hear a sound effect");
+    menu.AddItem(NULL_STRING, "Hear sound in spec");
+    menu.AddItem(NULL_STRING, "Change Sound Volume");
+    menu.AddItem(NULL_STRING, "Select Hitmarker");
+    menu.Display(client, MENU_TIME_FOREVER);
 }
 
 public int MenuHandler_HitMarker(Menu menu, MenuAction action, int param1, int param2)
 {
-	switch(action)
-	{
-		case MenuAction_End:
-		{
-			if(param1 != MenuEnd_Selected)
-				delete menu;
-		}
-		case MenuAction_Cancel:
-		{
-			if(param2 == MenuCancel_ExitBack)
-				ShowCookieMenu(param1);
-		}
-		case MenuAction_Select:
-		{
-			switch(param2)
-			{
-				case 0:
-				{
-					g_bShowZombie[param1] = !g_bShowZombie[param1];
-				}
-				case 1:
-				{
-					g_bShowBoss[param1] = !g_bShowBoss[param1];
-				}
-				case 2:
-				{
-					g_bHearSound[param1] = !g_bHearSound[param1];
-				}
-				case 3:
-				{
-					g_bHearSoundSpec[param1] = !g_bHearSoundSpec[param1];
-				}
-				case 4:
-				{
-					DisplaySoundVolumesMenu(param1);
-				}
-				default: return 0;
-				
-			}
-			if(param2 != 4)
-				DisplayCookieMenu(param1);
-		}
-		case MenuAction_DisplayItem:
-		{
-			char sBuffer[32];
-			switch(param2)
-			{
-				case 0:
-				{
-					Format(sBuffer, sizeof(sBuffer), "Show against zombies: %s", g_bShowZombie[param1] ? "Enabled" : "Disabled");
-				}
-				case 1:
-				{
-					Format(sBuffer, sizeof(sBuffer), "Show against bosses: %s", g_bShowBoss[param1] ? "Enabled" : "Disabled");
-				}
-				case 2:
-				{
-					Format(sBuffer, sizeof(sBuffer), "Hear a sound effect: %s", g_bHearSound[param1] ? "Enabled" : "Disabled");
-				}
-				case 3:
-				{
-					Format(sBuffer, sizeof(sBuffer), "Hear sound in spec: %s", g_bHearSoundSpec[param1] ? "Enabled" : "Disabled");
-				}
-				case 4:
-				{
-					Format(sBuffer, sizeof(sBuffer), "HitMarker Sound Volume");
-				}
-			}
-			return RedrawMenuItem(sBuffer);
-		}
-	}
-	return 0;
+    switch(action)
+    {
+        case MenuAction_End:
+        {
+            if(param1 != MenuEnd_Selected)
+                delete menu;
+        }
+        case MenuAction_Cancel:
+        {
+            if(param2 == MenuCancel_ExitBack)
+                ShowCookieMenu(param1);
+        }
+        case MenuAction_Select:
+        {
+            switch(param2)
+            {
+                case 0:
+                {
+                    g_bShowZombie[param1] = !g_bShowZombie[param1];
+                }
+                case 1:
+                {
+                    g_bShowBoss[param1] = !g_bShowBoss[param1];
+                }
+                case 2:
+                {
+                    g_bHearSound[param1] = !g_bHearSound[param1];
+                }
+                case 3:
+                {
+                    g_bHearSoundSpec[param1] = !g_bHearSoundSpec[param1];
+                }
+                case 4:
+                {
+                    DisplaySoundVolumesMenu(param1);
+                }
+                case 5:
+                {
+                    DisplayHitmarkerMenu(param1);
+                }
+                default: return 0;
+                
+            }
+            if(param2 != 4 && param2 != 5)
+                DisplayCookieMenu(param1);
+        }
+        case MenuAction_DisplayItem:
+        {
+            char sBuffer[32];
+            switch(param2)
+            {
+                case 0:
+                {
+                    Format(sBuffer, sizeof(sBuffer), "Show against zombies: %s", g_bShowZombie[param1] ? "Enabled" : "Disabled");
+                }
+                case 1:
+                {
+                    Format(sBuffer, sizeof(sBuffer), "Show against bosses: %s", g_bShowBoss[param1] ? "Enabled" : "Disabled");
+                }
+                case 2:
+                {
+                    Format(sBuffer, sizeof(sBuffer), "Hear a sound effect: %s", g_bHearSound[param1] ? "Enabled" : "Disabled");
+                }
+                case 3:
+                {
+                    Format(sBuffer, sizeof(sBuffer), "Hear sound in spec: %s", g_bHearSoundSpec[param1] ? "Enabled" : "Disabled");
+                }
+                case 4:
+                {
+                    Format(sBuffer, sizeof(sBuffer), "HitMarker Sound Volume");
+                }
+                case 5:
+                {
+                    Format(sBuffer, sizeof(sBuffer), "Select Hitmarker");
+                }
+            }
+            return RedrawMenuItem(sBuffer);
+        }
+    }
+    return 0;
 }
 
 public void DisplaySoundVolumesMenu(int client)
@@ -410,24 +585,30 @@ stock void HandleHit(int client, bool bBoss)
 
 stock void HandleHitClient(int client, bool bBoss)
 {
-	if (!IsValidClient(client, false, false, true))
-		return;
+    if (!IsValidClient(client, false, false, true))
+        return;
 
-	if (((bBoss && g_bShowBoss[client]) || (!bBoss && g_bShowZombie[client])) && !g_bShowing[client])
-	{
-		g_bShowing[client] = true;
-		ShowOverlayToClient(client, MATERIAL_PATH_HIT);
+    char sSelectedHitmarker[256];
+    GetClientCookie(client, g_hHitmarkerCookie, sSelectedHitmarker, sizeof(sSelectedHitmarker));
 
-		CreateTimer(g_fHitIntervalDisplay, Timer_NoOverlay, client);
-	}
+    if (sSelectedHitmarker[0] == '\0')
+        strcopy(sSelectedHitmarker, sizeof(sSelectedHitmarker), MATERIAL_PATH_HIT);
 
-	if (!g_bHearSoundSpec[client] && GetClientTeam(client) == CS_TEAM_SPECTATOR)
-		return;
+    if (((bBoss && g_bShowBoss[client]) || (!bBoss && g_bShowZombie[client])) && !g_bShowing[client])
+    {
+        g_bShowing[client] = true;
+        ShowOverlayToClient(client, sSelectedHitmarker);
 
-	if (g_bHearSound[client])
-	{
-		EmitSoundToClient(client, SND_PATH_HIT_PRECACHE, SOUND_FROM_PLAYER, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, g_fClientSoundVolume[client]);
-	}
+        CreateTimer(g_fHitIntervalDisplay, Timer_NoOverlay, client);
+    }
+
+    if (!g_bHearSoundSpec[client] && GetClientTeam(client) == CS_TEAM_SPECTATOR)
+        return;
+
+    if (g_bHearSound[client])
+    {
+        EmitSoundToClient(client, SND_PATH_HIT_PRECACHE, SOUND_FROM_PLAYER, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, g_fClientSoundVolume[client]);
+    }
 }
 
 stock void HandleHitSpectators(int client, bool bBoss)
